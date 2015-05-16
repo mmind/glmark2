@@ -11,7 +11,7 @@ override_dh_clean:
 	$(RM) -r build
 
 override_dh_auto_configure:
-	./waf configure --enable-gl --enable-glesv2 --prefix=/usr
+	./waf configure --with-flavors=drm-gl,drm-glesv2,wayland-gl,wayland-glesv2,x11-gl,x11-glesv2 --prefix=/usr
 
 override_dh_auto_build:
 	./waf build

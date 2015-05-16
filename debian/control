@@ -4,10 +4,12 @@ Priority: optional
 Maintainer: Debian Games Team <pkg-games-devel@lists.alioth.debian.org>
 Uploaders: Dmitry Smirnov <onlyjob@member.fsf.org>
 Build-Depends: debhelper (>= 9)
+              ,libgbm-dev
               ,libgl1-mesa-dev
               ,libgles2-mesa-dev
               ,libjpeg-dev
               ,libpng-dev
+              ,libwayland-dev
               ,pkg-config
               ,python
 Standards-Version: 3.9.4
