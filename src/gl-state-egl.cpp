@@ -27,6 +27,13 @@
 #include "gl-headers.h"
 #include <iomanip>
 #include <sstream>
+#include <cstring>
+
+#include <EGL/eglext.h>
+
+#ifndef EGL_EXT_platform_base
+typedef EGLDisplay (EGLAPIENTRYP PFNEGLGETPLATFORMDISPLAYEXTPROC) (EGLenum platform, void *native_display, const EGLint *attrib_list);
+#endif
 
 using std::vector;
 using std::string;
@@ -287,6 +294,17 @@ EglConfig::print() const
  * GLStateEGL public methods *
  ****************************/
 
+GLStateEGL::~GLStateEGL()
+{
+    if(egl_display_ != nullptr){
+        if(!eglTerminate(egl_display_))
+            Log::error("eglTerminate failed\n");
+    }
+
+    if(!eglReleaseThread())
+       Log::error("eglReleaseThread failed\n");
+}
+
 bool
 GLStateEGL::init_display(void* native_display, GLVisualConfig& visual_config)
 {
@@ -409,13 +427,58 @@ GLStateEGL::getVisualConfig(GLVisualConfig& vc)
  * GLStateEGL private methods *
  *****************************/
 
+#ifdef GLMARK2_USE_X11
+#define GLMARK2_NATIVE_EGL_DISPLAY_ENUM EGL_PLATFORM_X11_KHR
+#elif  GLMARK2_USE_WAYLAND
+#define GLMARK2_NATIVE_EGL_DISPLAY_ENUM EGL_PLATFORM_WAYLAND_KHR
+#elif  GLMARK2_USE_DRM
+#define GLMARK2_NATIVE_EGL_DISPLAY_ENUM EGL_PLATFORM_GBM_KHR
+#elif  GLMARK2_USE_MIR
+#define GLMARK2_NATIVE_EGL_DISPLAY_ENUM EGL_PLATFORM_MIR_KHR
+#elif  GLMARK2_USE_DISPMANX
+#define GLMARK2_NATIVE_EGL_DISPLAY_ENUM 0
+#endif
+
 bool
 GLStateEGL::gotValidDisplay()
 {
     if (egl_display_)
         return true;
 
-    egl_display_ = eglGetDisplay(native_display_);
+    char const * __restrict const supported_extensions =
+        eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
+
+    if (supported_extensions
+        && strstr(supported_extensions, "EGL_EXT_platform_base"))
+    {
+        Log::debug("Using eglGetPlatformDisplayEXT()\n");
+        PFNEGLGETPLATFORMDISPLAYEXTPROC get_platform_display =
+            reinterpret_cast<PFNEGLGETPLATFORMDISPLAYEXTPROC>(
+                eglGetProcAddress("eglGetPlatformDisplayEXT"));
+
+        if (get_platform_display != nullptr) {
+            egl_display_ = get_platform_display(
+                GLMARK2_NATIVE_EGL_DISPLAY_ENUM,
+                reinterpret_cast<void*>(native_display_),
+                nullptr);
+        }
+
+        if (!egl_display_) {
+            Log::debug("eglGetPlatformDisplayEXT() failed with error: 0x%x\n",
+                       eglGetError());
+        }
+    }
+    else
+    {
+        Log::debug("eglGetPlatformDisplayEXT() seems unsupported\n");
+    }
+
+    /* Just in case get_platform_display failed... */
+    if (!egl_display_) {
+        Log::debug("Falling back to eglGetDisplay()\n");
+        egl_display_ = eglGetDisplay(native_display_);
+    }
+
     if (!egl_display_) {
         Log::error("eglGetDisplay() failed with error: 0x%x\n", eglGetError());
         return false;

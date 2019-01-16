@@ -54,12 +54,10 @@ NativeStateWayland::~NativeStateWayland()
     if (window_) {
         if (window_->shell_surface)
             wl_shell_surface_destroy(window_->shell_surface);
-        if (window_->opaque_reqion)
-            wl_region_destroy(window_->opaque_reqion);
-        if (window_->surface)
-            wl_surface_destroy(window_->surface);
         if (window_->native)
             wl_egl_window_destroy(window_->native);
+        if (window_->surface)
+            wl_surface_destroy(window_->surface);
         delete window_;
     }
 
@@ -102,7 +100,7 @@ NativeStateWayland::registry_handle_global(void *data, struct wl_registry *regis
                     wl_registry_bind(registry,
                                      id, &wl_shell_interface, 1));
     } else if (strcmp(interface, "wl_output") == 0) {
-        struct my_output *my_output = new struct my_output;
+        struct my_output *my_output = new struct my_output();
         memset(my_output, 0, sizeof(*my_output));
         my_output->output =
                 static_cast<struct wl_output *>(
@@ -191,7 +189,7 @@ NativeStateWayland::init_display()
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
-    display_ = new struct my_display;
+    display_ = new struct my_display();
 
     if (!display_) {
         return false;
@@ -223,7 +221,7 @@ NativeStateWayland::create_window(WindowProperties const& properties)
 {
     struct my_output *output = 0;
     if (!display_->outputs.empty()) output = display_->outputs.at(0);
-    window_ = new struct my_window;
+    window_ = new struct my_window();
     window_->properties = properties;
     window_->surface = wl_compositor_create_surface(display_->compositor);
     if (window_->properties.fullscreen && output) {
@@ -236,11 +234,14 @@ NativeStateWayland::create_window(WindowProperties const& properties)
                                                properties.width, properties.height);
     }
 
-    window_->opaque_reqion = wl_compositor_create_region(display_->compositor);
-    wl_region_add(window_->opaque_reqion, 0, 0,
+    struct wl_region *opaque_reqion = wl_compositor_create_region(display_->compositor);
+    wl_region_add(opaque_reqion, 0, 0,
                   window_->properties.width,
                   window_->properties.height);
-    wl_surface_set_opaque_region(window_->surface, window_->opaque_reqion);
+
+    wl_surface_set_opaque_region(window_->surface, opaque_reqion);
+
+    wl_region_destroy(opaque_reqion);
 
     window_->shell_surface = wl_shell_get_shell_surface(display_->shell,
                                                         window_->surface);

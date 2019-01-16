@@ -1,14 +1,10 @@
-import commands
-import subprocess
 import os
-import Options
-import Scripting
 from waflib import Context
 
 out = 'build'
 top = '.'
 
-VERSION = '2014.03'
+VERSION = '2017.07'
 APPNAME = 'glmark2'
 
 FLAVORS = {
@@ -19,7 +15,8 @@ FLAVORS = {
     'mir-gl' : 'glmark2-mir',
     'mir-glesv2' : 'glmark2-es2-mir',
     'wayland-gl' : 'glmark2-wayland',
-    'wayland-glesv2' : 'glmark2-es2-wayland'
+    'wayland-glesv2' : 'glmark2-es2-wayland',
+    'dispmanx-glesv2' : 'glmark2-es2-dispmanx',
 }
 FLAVORS_STR = ", ".join(FLAVORS.keys())
 
@@ -36,14 +33,14 @@ def list_contains(lst, token):
     return False
 
 def options(opt):
-    opt.tool_options('gnu_dirs')
-    opt.tool_options('compiler_cc')
-    opt.tool_options('compiler_cxx')
+    opt.load('gnu_dirs')
+    opt.load('compiler_c')
+    opt.load('compiler_cxx')
 
     opt.add_option('--with-flavors', type = 'string', action='callback',
                    callback=option_list_cb,
                    dest = 'flavors',
-                   help = "a list of flavors to build (%s, all)" % FLAVORS_STR)
+                   help = "a list of flavors to build (%s, all (except dispmanx-glesv2))" % FLAVORS_STR)
     opt.parser.set_default('flavors', [])
 
     opt.add_option('--no-debug', action='store_false', dest = 'debug',
@@ -57,40 +54,42 @@ def options(opt):
 
 def configure(ctx):
     # Special 'all' flavor
-    if 'all' in Options.options.flavors:
-        Options.options.flavors = list(set(Options.options.flavors) | set(FLAVORS.keys()))
-        Options.options.flavors.remove('all')
+    if 'all' in ctx.options.flavors:
+        ctx.options.flavors = list(set(ctx.options.flavors) | set(FLAVORS.keys()))
+        ctx.options.flavors.remove('all')
+        # dispmanx is a special case, we don't want to include it in all
+        ctx.options.flavors.remove('dispmanx-glesv2')
 
     # Ensure the flavors are valid
-    for flavor in Options.options.flavors:
+    for flavor in ctx.options.flavors:
        if flavor not in FLAVORS:
             ctx.fatal('Unknown flavor: %s. Supported flavors are %s' % (flavor, FLAVORS_STR))
 
-    if not Options.options.flavors:
+    if not ctx.options.flavors:
         ctx.fatal('You need to select at least one flavor. Supported flavors are %s' % FLAVORS_STR)
 
     for flavor in FLAVORS:
-        if flavor in Options.options.flavors:
+        if flavor in ctx.options.flavors:
             ctx.env["FLAVOR_%s" % flavor.upper().replace('-','_')] = FLAVORS[flavor]
 
-    ctx.check_tool('gnu_dirs')
-    ctx.check_tool('compiler_cc')
-    ctx.check_tool('compiler_cxx')
+    ctx.load('gnu_dirs')
+    ctx.load('compiler_c')
+    ctx.load('compiler_cxx')
 
     # Check required headers
     req_headers = ['stdlib.h', 'string.h', 'unistd.h', 'stdint.h', 'stdio.h', 'jpeglib.h']
     for header in req_headers:
-        ctx.check_cxx(header_name = header, auto_add_header_name = True, mandatory = True)
+        ctx.check_cc(header_name = header, auto_add_header_name = True, mandatory = True)
 
     # Check for required libs
     req_libs = [('m', 'm'), ('jpeg', 'jpeg')]
     for (lib, uselib) in req_libs:
-        ctx.check_cxx(lib = lib, uselib_store = uselib)
+        ctx.check_cc(lib = lib, uselib_store = uselib)
 
     # Check required functions
     req_funcs = [('memset', 'string.h', []) ,('sqrt', 'math.h', ['m'])]
     for func, header, uselib in req_funcs:
-        ctx.check_cxx(function_name = func, header_name = header,
+        ctx.check_cc(function_name = func, header_name = header,
                       uselib = uselib, mandatory = True)
 
     # Check for a supported version of libpng
@@ -109,16 +108,30 @@ def configure(ctx):
     if not have_png:
         ctx.fatal('You need to install a supported version of libpng: ' + str(supp_png_pkgs))
 
+    dispmanx = 'dispmanx-glesv2' in ctx.options.flavors
+    if dispmanx:
+        # dispmanx uses custom Broadcom libraries that don't follow standard
+        # Linux packaging.  Just force the library setup here.
+        if len(ctx.options.flavors) != 1:
+            ctx.fatal("dispmanx can't be built with any other flavor")
+
+        ctx.env.append_value('CXXFLAGS', '-I/opt/vc/include')
+
+        ctx.check_cxx(lib = 'brcmGLESv2', uselib_store = 'glesv2', libpath='/opt/vc/lib')
+        ctx.check_cxx(lib = ['brcmEGL', 'brcmGLESv2'], uselib_store = 'egl', libpath='/opt/vc/lib')
+        ctx.check_cxx(lib = ['bcm_host', 'vcos', 'vchiq_arm'], uselib_store = 'dispmanx', libpath='/opt/vc/lib')
+
     # Check optional packages
-    opt_pkgs = [('x11', 'x11', None, list_contains(Options.options.flavors, 'x11')),
-                ('gl', 'gl', None, list_contains(Options.options.flavors, 'gl$')),
-                ('egl', 'egl', None, list_contains(Options.options.flavors, 'glesv2$')),
-                ('glesv2', 'glesv2', None, list_contains(Options.options.flavors, 'glesv2$')),
-                ('libdrm','drm', None, list_contains(Options.options.flavors, 'drm')),
-                ('gbm','gbm', None, list_contains(Options.options.flavors, 'drm')),
-                ('mirclient','mirclient', '0.13', list_contains(Options.options.flavors, 'mir')),
-                ('wayland-client','wayland-client', None, list_contains(Options.options.flavors, 'wayland')),
-                ('wayland-egl','wayland-egl', None, list_contains(Options.options.flavors, 'wayland'))]
+    opt_pkgs = [('x11', 'x11', None, list_contains(ctx.options.flavors, 'x11')),
+                ('gl', 'gl', None, list_contains(ctx.options.flavors, 'gl$') and not dispmanx),
+                ('egl', 'egl', None, list_contains(ctx.options.flavors, 'glesv2$') and not dispmanx),
+                ('glesv2', 'glesv2', None, list_contains(ctx.options.flavors, 'glesv2$') and not dispmanx),
+                ('libdrm','drm', None, list_contains(ctx.options.flavors, 'drm')),
+                ('gbm','gbm', None, list_contains(ctx.options.flavors, 'drm')),
+                ('libudev', 'udev', None, list_contains(ctx.options.flavors, 'drm')),
+                ('mirclient','mirclient', '0.13', list_contains(ctx.options.flavors, 'mir')),
+                ('wayland-client','wayland-client', None, list_contains(ctx.options.flavors, 'wayland')),
+                ('wayland-egl','wayland-egl', None, list_contains(ctx.options.flavors, 'wayland'))]
     for (pkg, uselib, atleast, mandatory) in opt_pkgs:
         if atleast is None:
             ctx.check_cfg(package = pkg, uselib_store = uselib,
@@ -127,23 +140,23 @@ def configure(ctx):
             ctx.check_cfg(package = pkg, uselib_store = uselib, atleast_version=atleast,
                           args = '--cflags --libs', mandatory = mandatory)
 
-    ctx.env.append_unique('CXXFLAGS', '-Werror -Wall -Wextra -Wnon-virtual-dtor'.split(' '))
 
-    # Prepend -O# and -g flags so that they can be overriden by the
-    # CFLAGS environment variable
-    if Options.options.opt:
+    # Prepend CXX flags so that they can be overriden by the
+    # CXXFLAGS environment variable
+    if ctx.options.opt:
         ctx.env.prepend_value('CXXFLAGS', '-O2')
-    if Options.options.debug:
+    if ctx.options.debug:
         ctx.env.prepend_value('CXXFLAGS', '-g')
+    ctx.env.prepend_value('CXXFLAGS', '-std=c++14 -Wall -Wextra -Wnon-virtual-dtor'.split(' '))
 
     ctx.env.HAVE_EXTRAS = False
-    if Options.options.extras_path is not None:
+    if ctx.options.extras_path is not None:
         ctx.env.HAVE_EXTRAS = True
-        ctx.env.append_unique('GLMARK_EXTRAS_PATH', Options.options.extras_path)
-        ctx.env.append_unique('DEFINES', 'GLMARK_EXTRAS_PATH="%s"' % Options.options.extras_path)
+        ctx.env.append_unique('GLMARK_EXTRAS_PATH', ctx.options.extras_path)
+        ctx.env.append_unique('DEFINES', 'GLMARK_EXTRAS_PATH="%s"' % ctx.options.extras_path)
 
-    if Options.options.data_path is not None:
-        data_path = Options.options.data_path 
+    if ctx.options.data_path is not None:
+        data_path = ctx.options.data_path 
     else:
         data_path = os.path.join(ctx.env.DATADIR, 'glmark2')
 
@@ -157,8 +170,8 @@ def configure(ctx):
     ctx.msg("Including extras", "Yes" if ctx.env.HAVE_EXTRAS else "No",
             color = 'PINK');
     if ctx.env.HAVE_EXTRAS:
-        ctx.msg("Extras path", Options.options.extras_path, color = 'PINK')
-    ctx.msg("Building flavors", Options.options.flavors)
+        ctx.msg("Extras path", ctx.options.extras_path, color = 'PINK')
+    ctx.msg("Building flavors", ctx.options.flavors)
 
 def build(ctx):
     ctx.recurse('src')

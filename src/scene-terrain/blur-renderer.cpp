@@ -23,6 +23,8 @@
 #include "renderer.h"
 #include "shader-source.h"
 
+#include <cstdlib>
+
 void
 create_blur_shaders(ShaderSource& vtx_source, ShaderSource& frg_source,
                     unsigned int radius, float sigma, BlurRenderer::BlurDirection direction,
@@ -82,7 +84,7 @@ create_blur_shaders(ShaderSource& vtx_source, ShaderSource& frg_source,
         sigma = 1.0;
 
     unsigned int side = 2 * radius + 1;
-    float values[radius];
+    float values[radius + 1];
     float sum = 0.0;
 
     for (unsigned int i = 0; i < radius + 1; i++) {
